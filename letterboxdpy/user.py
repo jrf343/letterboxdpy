@@ -23,6 +23,9 @@ class User:
 
     def jsonify(self) -> str:
         return json.dumps(self, indent=4,cls=Encoder)
+    
+    def get_username(self) -> str:
+        return self.username
 
     def get_parsed_page(self, url: str) -> None:
         # This fixes a blocked by cloudflare error i've encountered
@@ -33,10 +36,9 @@ class User:
 
         return BeautifulSoup(requests.get(url, headers=headers).text, "lxml")
 
-    def user_favorites(self, page: None) -> list:        
+    def user_favorites(self, page: None) -> list:      
         data = page.find("section", {"id": ["favourites"], }).findChildren("div")
         names = []
-
         for div in data:
             img = div.find("img")
             movie_url = img.parent['data-film-slug']
@@ -128,7 +130,7 @@ def user_films_rated(user: User) -> list:
             except Exception as e:
                 print(f"[Error]: couldn't get film rating. {e=}")
             finally:
-                rating_list.append( (film_title_unreliable, film_id, film_url_pattern, rating ) )
+                rating_list.append( (film_id, film_url_pattern, rating) )
 
         curr = len(rating_list)
 
@@ -136,36 +138,49 @@ def user_films_rated(user: User) -> list:
 
 
 def user_following(user: User) -> list:
-    if type(user) != User:
-        raise Exception("Improper parameter")
+    '''Returns a list of dictionaries with the user's following'''
 
-    # returns the first page of following
-    page = user.get_parsed_page("https://letterboxd.com/" + user.username + "/following/")
-    data = page.find_all("img", attrs={'height': '40'})
-
+    page_url = f"https://letterboxd.com/{user.username}/following/"
     ret = []
 
-    for person in data:
-        ret.append(person['alt'])
+    while True:
+        page = user.get_parsed_page(page_url)
+        data = page.find_all("a", {"class": ["avatar -a40"], })
+
+        for person in data:
+            username = person['href']
+            ret.append(username[1:-1])
+
+        next_page = page.find("li", {"class": ["next"], })
+        if not next_page:
+            break
+        page_num = next_page.find("a")['href'].split('/')[-2]
+        page_url = f"https://letterboxd.com/{user.username}/following/page/{page_num}/"
 
     return ret
 
 
 def user_followers(user: User) -> list:
-    if type(user) != User:
-        raise Exception("Improper parameter")
+    '''Returns a list of dictionaries with the user's followers'''
 
-    #returns the first page of followers
-    page = user.get_parsed_page("https://letterboxd.com/" + user.username + "/followers/")
-    data = page.find_all("img", attrs={'height': '40'})
-
+    page_url = f"https://letterboxd.com/{user.username}/followers/"
     ret = []
 
-    for person in data:
-        ret.append(person['alt'])
+    while True:
+        page = user.get_parsed_page(page_url)
+        data = page.find_all("a", {"class": ["avatar -a40"], })
+
+        for person in data:
+            username = person['href']
+            ret.append(username[1:-1])
+
+        next_page = page.find("a", {"class": ["next"], })
+        if not next_page:
+            break
+        page_num = next_page['href'].split('/')[-2]
+        page_url = f"https://letterboxd.com/{user.username}/followers/page/{page_num}/"
 
     return ret
-
 
 def user_genre_info(user: User) -> dict:
     if type(user) != User:
@@ -199,9 +214,14 @@ def user_reviews(user: User) -> list:
         curr = {}
 
         curr['movie'] = item.find("a").text #movie title
-        curr['rating'] = item.find("span", {"class": ["rating"], }).text #movie rating
+        # Check if the rating element exists before extracting its text
+        rating_element = item.find("span", {"class": ["rating"], })
+        curr['rating'] = rating_element.text if rating_element else None
         curr['date'] = item.find("span", {"class": ["_nobr"], }).text #rating date
-        curr['review'] = item.find("div", {"class": ["body-text"], }).findChildren()[0].text #review
+        if (item.find("div", {"class": ["hidden-spoilers expanded-text"], })):
+            curr['review'] = item.find("div", {"class": ["hidden-spoilers expanded-text"], }).findChildren()[0].text #spoiler
+        else:
+            curr['review'] = item.find("div", {"class": ["body-text"], }).findChildren()[0].text #review
 
         ret.append(curr)
 
@@ -240,6 +260,8 @@ def user_diary_page(user: User, page) -> list:
             month_year = item.find("td", {"class": ["td-calendar"], }).text
 
         curr['date'] = day.strip() + ' ' + month_year.strip()  # rating date
+        curr['liked'] = bool(item.find(
+            "span", {"class": ["has-icon icon-16 large-liked icon-liked hide-for-owner"], }))
         ret.append(curr)
 
     return ret
@@ -254,7 +276,6 @@ def user_diary(user: User) -> list:
     # Get the max number of pages
     try:
         max_page = page.findAll("li", {"class": ["paginate-page"], })[-1].text
-        print(max_page)
         ret = []
 
         for i in range(1, int(max_page)+1):
